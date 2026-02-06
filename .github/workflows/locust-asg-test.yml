@@ -1,4 +1,4 @@
-name: ASG Replication Load Test
+name: ASG Replication Load Test - Dynamic
 
 on:
   workflow_dispatch:
@@ -6,6 +6,12 @@ on:
 jobs:
   load-test:
     runs-on: ubuntu-latest
+    # Definisikan variabel kustom di sini agar mudah diubah
+    env:
+      TEST_USERS: 2000 # Jumlah total user
+      TEST_SPAWN_RATE: 50 # Penambahan user tiap detik
+      TEST_RUN_TIME: "5m" # Format Locust (misal: 10m, 1h)
+
 
     steps:
       - name: Checkout Repository
@@ -30,63 +36,60 @@ jobs:
       - name: Create Locustfile
         run: |
           cat <<EOF > locustfile.py
-          import logging
-          from locust import HttpUser, task, between, events
-
-          logging.basicConfig(level=logging.INFO)
-
+          from locust import HttpUser, task, between
           class ASGLoadTest(HttpUser):
-              # Wait time diperkecil agar request lebih agresif
               wait_time = between(0.1, 0.5) 
-
-              @task(10)
+              @task
               def access_homepage(self):
-                  # Menyerang root dengan load besar untuk memicu CPU overhead
                   self.client.get("/")
-
-          @events.test_stop.add_listener
-          def on_test_stop(environment, **kwargs):
-              print("\nSCENARIO FINISHED\n")
           EOF
 
-      - name: Stress Test & Scaling Trigger (Aggressive)
+      - name: Initialize CSV File
+        run: echo "Timestamp,RunningInstances" > instance_metrics.csv
+
+      - name: Run Load Test & Monitor Instances
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo ">>> Memulai Stress Test durasi panjang (10 Menit)..."
-          echo ">>> Target: Memicu CloudWatch Alarm"
+          echo ">>> Memulai Pengujian dengan $TEST_USERS User..."
           
-          # Menjalankan 1500 users selama 10 menit tanpa putus
+          # Jalankan pemantauan instance di background (setiap 60 detik)
+          (
+            # Loop selama durasi pengujian (konversi 10m ke detik jika perlu, atau pakai loop manual)
+            while true; do
+              TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              COUNT=$(aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text)
+              echo "$TIMESTAMP,$COUNT" >> instance_metrics.csv
+              sleep 60
+            done
+          ) &
+          MONITOR_PID=$! # Simpan ID proses pemantauan
+          
+          # Jalankan Locust
           locust -f locustfile.py --host "$ALB_URL" --headless \
-            -u 1500 \
-            -r 50 \
-            --run-time 10m \
+            -u $TEST_USERS \
+            -r $TEST_SPAWN_RATE \
+            --run-time $TEST_RUN_TIME \
             --html "stress_test_report.html" --only-summary || true
+          
+          # Matikan pemantauan background setelah test selesai
+          kill $MONITOR_PID
+          echo ">>> Pengujian Selesai. Data instance dicatat ke CSV."
 
-      - name: Wait for ASG Provisioning
+      - name: Final Provisioning Check
         if: always()
         run: |
-          echo "Menunggu 3 menit tambahan untuk sinkronisasi EC2 ke ALB..."
-          sleep 180
-          
-      - name: Final Instance Check
-        if: always()
-        run: |
-          echo ">>> Jumlah Instance Akhir:"
-          aws ec2 describe-instances \
-            --filters "Name=instance-state-name,Values=running" \
-            --query "length(Reservations[*].Instances[])" \
-            --output text
-          
-          echo ">>> Detail Instance ID dan Tipe:"
-          aws ec2 describe-instances \
-            --filters "Name=instance-state-name,Values=running" \
-            --query "Reservations[*].Instances[*].[InstanceId,InstanceType,LaunchTime]" \
-            --output table
+          echo "Menunggu 60 detik untuk pengecekan terakhir..."
+          sleep 60
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COUNT=$(aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text)
+          echo "$TIMESTAMP,$COUNT" >> instance_metrics.csv
 
-      - name: Upload Test Reports
+      - name: Upload Test Artifacts (HTML & CSV)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: locust-asg-reports-revised
-          path: "*.html"
+          name: load-test-results
+          path: |
+            stress_test_report.html
+            instance_metrics.csv
