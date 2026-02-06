@@ -1,4 +1,4 @@
-name: ASG Replication Load Test
+name: ASG Replication Load Test with Session Token
 
 on:
   workflow_dispatch:
@@ -16,8 +16,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Locust
-        run: pip install locust
+      - name: Install Dependencies
+        run: |
+          pip install locust
+          sudo apt-get update && sudo apt-get install -y awscli
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Penambahan Wajib Session Token
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Create Locustfile
         run: |
@@ -43,27 +53,52 @@ jobs:
               @task(1)
               def cpu_intensive_task(self):
                   self.client.get("/heavy-compute")
+
+          @events.test_stop.add_listener
+          def on_test_stop(environment, **kwargs):
+              print("\nSCENARIO FINISHED\n")
           EOF
 
-      - name: Run Load Test Scenarios
+      - name: Scenario 1 - Baseline (200 Users)
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          # Gunakan satu perintah locust per tahap agar log lebih jelas
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
           echo "Starting Baseline..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary || true
-          
-          echo "Cooldown 30s..."
-          sleep 30
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary
+          echo "Current Running Instances:"
+          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
-          echo "Starting Stress Test (Trigger ASG)..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 1m --html "stress.html" --only-summary || true
+      - name: Scenario 2 - Stress Test (500 Users)
+        if: always()
+        env:
+          ALB_URL: ${{ secrets.ALB_URL }}
+        run: |
+          echo "Starting Stress Test (Triggering ASG)..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 2m --html "stress.html" --only-summary
+          echo "Checking for replication..."
+          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
+
+      - name: Cooldown & Provisioning Wait
+        if: always()
+        run: |
+          echo "Waiting 2 minutes for ASG to spin up new instances..."
+          sleep 120
+          echo "Instance count after cooldown:"
+          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
+
+      - name: Scenario 3 - Peak Load (1000 Users)
+        if: always()
+        env:
+          ALB_URL: ${{ secrets.ALB_URL }}
+        run: |
+          echo "Starting Peak Load Validation..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 1000 -r 20 --run-time 2m --html "peak.html" --only-summary
+          echo "Final Running Instances:"
+          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
       - name: Upload Test Reports
-        if: always() # Pastikan laporan tetap diupload meskipun tes sebelumnya error
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: locust-reports
+          name: locust-asg-reports
           path: "*.html"
