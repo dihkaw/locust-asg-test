@@ -62,7 +62,7 @@ jobs:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
           echo ">>> Monitoring: Starting Baseline..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 100 -r 4 --run-time 1m --html "baseline.html" --only-summary || true
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary || true
           echo ">>> Current Running Instances:"
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
@@ -72,7 +72,7 @@ jobs:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
           echo ">>> Monitoring: Starting Stress Test..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 2m --html "stress.html" --only-summary || true
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 600 -r 15 --run-time 1m --html "stress.html" --only-summary || true
           echo ">>> Checking for replication..."
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
@@ -90,7 +90,7 @@ jobs:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
           echo ">>> Monitoring: Starting Peak Load..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 1000 -r 20 --run-time 2m --html "peak.html" --only-summary || true
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 1200 -r 30 --run-time 1m --html "peak.html" --only-summary || true
           echo ">>> Final Running Instances:"
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
