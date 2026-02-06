@@ -1,0 +1,108 @@
+name: ASG Replication Load Test
+
+on:
+  workflow_dispatch: # Memungkinkan menjalankan manual dari tab Actions
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Locust
+        run: |
+          pip install locust
+
+      - name: Create Locustfile
+        run: |
+          cat <<EOF > locustfile.py
+          import logging
+          from locust import HttpUser, task, between, events
+
+          logging.basicConfig(level=logging.INFO)
+
+          class ASGLoadTest(HttpUser):
+              wait_time = between(1, 5)
+
+              @task(3)
+              def access_homepage(self):
+                  with self.client.get("/", catch_response=True) as response:
+                      if response.status_code == 200:
+                          if "Welcome" in response.text or "App" in response.text:
+                              response.success()
+                          else:
+                              response.failure("Response 200 tapi konten tidak sesuai")
+                      elif response.status_code == 502:
+                          response.failure("502 Bad Gateway: Instance belum In-Service")
+                      elif response.status_code == 504:
+                          response.failure("504 Gateway Timeout: Instance Overload")
+                      else:
+                          response.failure(f"Error: {response.status_code}")
+
+              @task(1)
+              def cpu_intensive_task(self):
+                  with self.client.get("/heavy-compute", catch_response=True) as response:
+                      if response.status_code == 200:
+                          response.success()
+                      else:
+                          response.failure(f"Heavy task error: {response.status_code}")
+
+          @events.test_stop.add_listener
+          def on_test_stop(environment, **kwargs):
+              print("\n" + "="*30)
+              print("      PENGUJIAN SELESAI")
+              print("="*30)
+              if environment.stats.total.num_failures > 0:
+                  print(f"Total Kegagalan: {environment.stats.total.num_failures}")
+              else:
+                  print("Status: Sistem Sangat Stabil.")
+              print("="*30 + "\n")
+          EOF
+
+      - name: Run Load Test Scenarios
+        env:
+          ALB_URL: ${{ secrets.ALB_URL }} # Mengambil URL dari Github Secrets
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          
+          run_scenario() {
+              echo ">> Menjalankan: $1 User | Spawn: $2 User/s | Durasi: $3"
+              locust -f locustfile.py \
+                  --host "$ALB_URL" \
+                  --headless \
+                  -u "$1" \
+                  -r "$2" \
+                  --run-time "$3" \
+                  --html "report_$4_$TIMESTAMP.html" \
+                  --only-summary
+          }
+
+          echo "===================================================="
+          echo " PENGUJIAN REPLIKASI ASG - $TIMESTAMP "
+          echo "===================================================="
+
+          echo "[1/3] Tahap Baseline..."
+          run_scenario 200 5 1m "baseline"
+          
+          sleep 60
+
+          echo "[2/3] Tahap Stress (Trigger Scaling)..."
+          run_scenario 500 10 1m "trigger"
+          
+          sleep 60
+
+          echo "[3/3] Tahap Peak (Validation)..."
+          run_scenario 1000 20 1m "peak"
+
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-reports-${{ github.run_id }}
+          path: "*.html"
