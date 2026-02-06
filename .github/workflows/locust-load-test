@@ -1,0 +1,62 @@
+name: Website Load Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    # Variabel kustom untuk memudahkan pengaturan load test
+    env:
+      TARGET_URL: ${{ secrets.TARGET_URL }} # Ganti dengan URL target ("url") atau gunakan Github Secrets
+      TEST_USERS: 1000  # Jumlah total simulasi user
+      TEST_SPAWN_RATE: 20 # Jumlah user yang naik per detik
+      TEST_RUN_TIME: "5m" # Durasi test (misal: 5m, 10m, 1h)
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Locust
+        run: pip install locust 
+
+      - name: Create Locustfile
+        run: |
+          cat <<EOF > locustfile.py
+          from locust import HttpUser, task, between
+          import logging
+
+          class WebsiteUser(HttpUser):
+              # Waktu tunggu antar request (0.5 sampai 2 detik)
+              wait_time = between(0.5, 2.0) 
+              
+              @task
+              def access_homepage(self):
+                  self.client.get("/")
+          EOF
+
+      - name: Run Load Test
+        run: |
+          echo ">>> Memulai Pengujian pada $TARGET_URL"
+          echo ">>> Konfigurasi: $TEST_USERS Users, Spawn Rate $TEST_SPAWN_RATE, Durasi $TEST_RUN_TIME"
+          
+          locust -f locustfile.py \
+            --host "$TARGET_URL" \
+            --headless \
+            -u $TEST_USERS \
+            -r $TEST_SPAWN_RATE \
+            --run-time $TEST_RUN_TIME \
+            --html "load_test_report.html" \
+            --only-summary
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-load-test-report
+          path: load_test_report.html
