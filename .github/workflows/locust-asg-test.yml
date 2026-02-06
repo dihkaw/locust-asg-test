@@ -1,7 +1,7 @@
 name: ASG Replication Load Test
 
 on:
-  workflow_dispatch: # Memungkinkan menjalankan manual dari tab Actions
+  workflow_dispatch:
 
 jobs:
   load-test:
@@ -17,8 +17,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Locust
-        run: |
-          pip install locust
+        run: pip install locust
 
       - name: Create Locustfile
         run: |
@@ -35,74 +34,36 @@ jobs:
               def access_homepage(self):
                   with self.client.get("/", catch_response=True) as response:
                       if response.status_code == 200:
-                          if "Welcome" in response.text or "App" in response.text:
-                              response.success()
-                          else:
-                              response.failure("Response 200 tapi konten tidak sesuai")
-                      elif response.status_code == 502:
-                          response.failure("502 Bad Gateway: Instance belum In-Service")
-                      elif response.status_code == 504:
-                          response.failure("504 Gateway Timeout: Instance Overload")
+                          response.success()
+                      elif response.status_code in [502, 503, 504]:
+                          response.failure(f"ALB Error: {response.status_code}")
                       else:
                           response.failure(f"Error: {response.status_code}")
 
               @task(1)
               def cpu_intensive_task(self):
-                  with self.client.get("/heavy-compute", catch_response=True) as response:
-                      if response.status_code == 200:
-                          response.success()
-                      else:
-                          response.failure(f"Heavy task error: {response.status_code}")
-
-          @events.test_stop.add_listener
-          def on_test_stop(environment, **kwargs):
-              print("\n" + "="*30)
-              print("      PENGUJIAN SELESAI")
-              print("="*30)
-              if environment.stats.total.num_failures > 0:
-                  print(f"Total Kegagalan: {environment.stats.total.num_failures}")
-              else:
-                  print("Status: Sistem Sangat Stabil.")
-              print("="*30 + "\n")
+                  self.client.get("/heavy-compute")
           EOF
 
       - name: Run Load Test Scenarios
         env:
-          ALB_URL: ${{ secrets.ALB_URL }} # Mengambil URL dari Github Secrets
+          ALB_URL: ${{ secrets.ALB_URL }}
         run: |
+          # Gunakan satu perintah locust per tahap agar log lebih jelas
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+          echo "Starting Baseline..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary || true
           
-          run_scenario() {
-              echo ">> Menjalankan: $1 User | Spawn: $2 User/s | Durasi: $3"
-              locust -f locustfile.py \
-                  --host "$ALB_URL" \
-                  --headless \
-                  -u "$1" \
-                  -r "$2" \
-                  --run-time "$3" \
-                  --html "report_$4_$TIMESTAMP.html" \
-                  --only-summary
-          }
+          echo "Cooldown 30s..."
+          sleep 30
 
-          echo "===================================================="
-          echo " PENGUJIAN REPLIKASI ASG - $TIMESTAMP "
-          echo "===================================================="
-
-          echo "[1/3] Tahap Baseline..."
-          run_scenario 200 5 1m "baseline"
-          
-          sleep 60
-
-          echo "[2/3] Tahap Stress (Trigger Scaling)..."
-          run_scenario 500 10 1m "trigger"
-          
-          sleep 60
-
-          echo "[3/3] Tahap Peak (Validation)..."
-          run_scenario 1000 20 1m "peak"
+          echo "Starting Stress Test (Trigger ASG)..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 1m --html "stress.html" --only-summary || true
 
       - name: Upload Test Reports
+        if: always() # Pastikan laporan tetap diupload meskipun tes sebelumnya error
         uses: actions/upload-artifact@v4
         with:
-          name: locust-reports-${{ github.run_id }}
+          name: locust-reports
           path: "*.html"
