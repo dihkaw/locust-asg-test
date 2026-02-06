@@ -11,7 +11,7 @@ jobs:
       TARGET_URL: ${{ secrets.TARGET_URL }} # Ganti dengan URL target ("url") atau gunakan Github Secrets
       TEST_USERS: 5000  # Jumlah total simulasi user
       TEST_SPAWN_RATE: 50 # Jumlah user yang naik per detik
-      TEST_RUN_TIME: "10m" # Durasi test (misal: 5m, 10m, 1h)
+      TEST_RUN_TIME: "3m" # Durasi test (misal: 5m, 10m, 1h)
 
     steps:
       - name: Checkout Repository
