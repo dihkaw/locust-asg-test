@@ -8,9 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     # Definisikan variabel kustom di sini agar mudah diubah
     env:
-      TEST_USERS: 2000 # Jumlah total user
+      TEST_USERS: 3000 # Jumlah total user
       TEST_SPAWN_RATE: 50 # Penambahan user tiap detik
-      TEST_RUN_TIME: "5m" # Format Locust (misal: 10m, 1h)
+      TEST_RUN_TIME: "10m" # Format Locust (misal: 10m, 1h)
 
 
     steps:
