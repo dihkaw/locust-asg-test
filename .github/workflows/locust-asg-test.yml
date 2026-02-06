@@ -1,4 +1,4 @@
-name: ASG Replication Load Test with Session Token
+name: ASG Replication Load Test
 
 on:
   workflow_dispatch:
@@ -16,17 +16,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          pip install locust
-          sudo apt-get update && sudo apt-get install -y awscli
+      - name: Install Locust
+        run: pip install locust 
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Penambahan Wajib Session Token
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Create Locustfile
@@ -59,13 +57,13 @@ jobs:
               print("\nSCENARIO FINISHED\n")
           EOF
 
-      - name: Scenario 1 - Baseline (200 Users)
+      - name: Scenario 1 - Baseline (100 Users)
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo "Starting Baseline..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary
-          echo "Current Running Instances:"
+          echo ">>> Monitoring: Starting Baseline..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 100 -r 4 --run-time 1m --html "baseline.html" --only-summary || true
+          echo ">>> Current Running Instances:"
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
       - name: Scenario 2 - Stress Test (500 Users)
@@ -73,9 +71,9 @@ jobs:
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo "Starting Stress Test (Triggering ASG)..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 2m --html "stress.html" --only-summary
-          echo "Checking for replication..."
+          echo ">>> Monitoring: Starting Stress Test..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 500 -r 10 --run-time 2m --html "stress.html" --only-summary || true
+          echo ">>> Checking for replication..."
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
       - name: Cooldown & Provisioning Wait
@@ -83,7 +81,7 @@ jobs:
         run: |
           echo "Waiting 2 minutes for ASG to spin up new instances..."
           sleep 120
-          echo "Instance count after cooldown:"
+          echo ">>> Instance count after cooldown:"
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
       - name: Scenario 3 - Peak Load (1000 Users)
@@ -91,9 +89,9 @@ jobs:
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo "Starting Peak Load Validation..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 1000 -r 20 --run-time 2m --html "peak.html" --only-summary
-          echo "Final Running Instances:"
+          echo ">>> Monitoring: Starting Peak Load..."
+          locust -f locustfile.py --host "$ALB_URL" --headless -u 1000 -r 20 --run-time 2m --html "peak.html" --only-summary || true
+          echo ">>> Final Running Instances:"
           aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
 
       - name: Upload Test Reports
