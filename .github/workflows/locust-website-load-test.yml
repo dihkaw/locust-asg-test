@@ -1,4 +1,4 @@
-name: Website Load Test
+name: Website Load Test with CSV Metrics
 
 on:
   workflow_dispatch:
@@ -6,12 +6,11 @@ on:
 jobs:
   load-test:
     runs-on: ubuntu-latest
-    # Variabel kustom untuk memudahkan pengaturan load test
     env:
-      TARGET_URL: ${{ secrets.TARGET_URL }} # Ganti dengan URL target ("url") atau gunakan Github Secrets
-      TEST_USERS: 5000  # Jumlah total simulasi user
-      TEST_SPAWN_RATE: 50 # Jumlah user yang naik per detik
-      TEST_RUN_TIME: "3m" # Durasi test (misal: 5m, 10m, 1h)
+      TARGET_URL: ${{ secrets.TARGET_URL }} 
+      TEST_USERS: 5000  
+      TEST_SPAWN_RATE: 50 
+      TEST_RUN_TIME: "3m" 
 
     steps:
       - name: Checkout Repository
@@ -32,7 +31,6 @@ jobs:
           import logging
 
           class WebsiteUser(HttpUser):
-              # Waktu tunggu antar request (0.5 sampai 2 detik)
               wait_time = between(0.5, 2.0) 
               
               @task
@@ -43,20 +41,25 @@ jobs:
       - name: Run Load Test
         run: |
           echo ">>> Memulai Pengujian pada $TARGET_URL"
-          echo ">>> Konfigurasi: $TEST_USERS Users, Spawn Rate $TEST_SPAWN_RATE, Durasi $TEST_RUN_TIME"
           
+          # Menambahkan parameter --csv untuk mencatat histori setiap detik
           locust -f locustfile.py \
             --host "$TARGET_URL" \
             --headless \
             -u $TEST_USERS \
             -r $TEST_SPAWN_RATE \
             --run-time $TEST_RUN_TIME \
+            --csv "load_test_results" \
             --html "load_test_report.html" \
             --only-summary
 
-      - name: Upload Test Report
+      - name: Upload Test Report & CSV Metrics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: website-load-test-report
-          path: load_test_report.html
+          name: website-load-test-results
+          path: |
+            load_test_report.html
+            load_test_results_stats_history.csv
+            load_test_results_stats.csv
+            load_test_results_failures.csv
