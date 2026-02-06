@@ -36,67 +36,57 @@ jobs:
           logging.basicConfig(level=logging.INFO)
 
           class ASGLoadTest(HttpUser):
-              wait_time = between(1, 5)
+              # Wait time diperkecil agar request lebih agresif
+              wait_time = between(0.1, 0.5) 
 
-              @task(3)
+              @task(10)
               def access_homepage(self):
-                  with self.client.get("/", catch_response=True) as response:
-                      if response.status_code == 200:
-                          response.success()
-                      elif response.status_code in [502, 503, 504]:
-                          response.failure(f"ALB Error: {response.status_code}")
-                      else:
-                          response.failure(f"Error: {response.status_code}")
-
-              @task(1)
-              def cpu_intensive_task(self):
-                  self.client.get("/heavy-compute")
+                  # Menyerang root dengan load besar untuk memicu CPU overhead
+                  self.client.get("/")
 
           @events.test_stop.add_listener
           def on_test_stop(environment, **kwargs):
               print("\nSCENARIO FINISHED\n")
           EOF
 
-      - name: Scenario 1 - Baseline (100 Users)
+      - name: Stress Test & Scaling Trigger (Aggressive)
         env:
           ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo ">>> Monitoring: Starting Baseline..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 200 -r 5 --run-time 1m --html "baseline.html" --only-summary || true
-          echo ">>> Current Running Instances:"
-          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
+          echo ">>> Memulai Stress Test durasi panjang (10 Menit)..."
+          echo ">>> Target: Memicu CloudWatch Alarm"
+          
+          # Menjalankan 1500 users selama 10 menit tanpa putus
+          locust -f locustfile.py --host "$ALB_URL" --headless \
+            -u 1500 \
+            -r 50 \
+            --run-time 10m \
+            --html "stress_test_report.html" --only-summary || true
 
-      - name: Scenario 2 - Stress Test (500 Users)
-        if: always()
-        env:
-          ALB_URL: ${{ secrets.ALB_URL }}
-        run: |
-          echo ">>> Monitoring: Starting Stress Test..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 600 -r 15 --run-time 1m --html "stress.html" --only-summary || true
-          echo ">>> Checking for replication..."
-          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
-
-      - name: Cooldown & Provisioning Wait
+      - name: Wait for ASG Provisioning
         if: always()
         run: |
-          echo "Waiting 2 minutes for ASG to spin up new instances..."
-          sleep 120
-          echo ">>> Instance count after cooldown:"
-          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
-
-      - name: Scenario 3 - Peak Load (1000 Users)
+          echo "Menunggu 3 menit tambahan untuk sinkronisasi EC2 ke ALB..."
+          sleep 180
+          
+      - name: Final Instance Check
         if: always()
-        env:
-          ALB_URL: ${{ secrets.ALB_URL }}
         run: |
-          echo ">>> Monitoring: Starting Peak Load..."
-          locust -f locustfile.py --host "$ALB_URL" --headless -u 1200 -r 30 --run-time 1m --html "peak.html" --only-summary || true
-          echo ">>> Final Running Instances:"
-          aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" --query "length(Reservations[*].Instances[])" --output text
+          echo ">>> Jumlah Instance Akhir:"
+          aws ec2 describe-instances \
+            --filters "Name=instance-state-name,Values=running" \
+            --query "length(Reservations[*].Instances[])" \
+            --output text
+          
+          echo ">>> Detail Instance ID dan Tipe:"
+          aws ec2 describe-instances \
+            --filters "Name=instance-state-name,Values=running" \
+            --query "Reservations[*].Instances[*].[InstanceId,InstanceType,LaunchTime]" \
+            --output table
 
       - name: Upload Test Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: locust-asg-reports
+          name: locust-asg-reports-revised
           path: "*.html"
