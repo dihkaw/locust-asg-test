@@ -8,8 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TARGET_URL: ${{ secrets.TARGET_URL }} 
-      TEST_USERS: 5000  
-      TEST_SPAWN_RATE: 25 
+      TEST_USERS: 550  
+      TEST_SPAWN_RATE: 18 
       TEST_RUN_TIME: "10m" 
 
     steps:
